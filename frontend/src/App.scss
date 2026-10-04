@@ -1,0 +1,437 @@
+.demo-app-content {
+  margin-top: 48px;
+  min-height: calc(100vh - 48px);
+  padding: 1.5rem;
+  background-color: #161616;
+}
+
+.demo-banner-sticky {
+  margin-bottom: 1.5rem;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.kpi-tile {
+  background-color: #262626;
+  border-left: 4px solid #0f62fe;
+  padding: 1.25rem;
+}
+
+.kpi-tile.critical {
+  border-left-color: #da1e28;
+}
+
+.kpi-tile.warning {
+  border-left-color: #ff832b;
+}
+
+.kpi-tile.success {
+  border-left-color: #24a148;
+}
+
+.kpi-title {
+  font-size: 0.875rem;
+  color: #c6c6c6;
+  margin-bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.kpi-value {
+  font-size: 2rem;
+  font-weight: 600;
+  color: #f4f4f4;
+  font-family: var(--cds-font-family-sans);
+}
+
+.kpi-subtitle {
+  font-size: 0.75rem;
+  color: #8d8d8d;
+  margin-top: 0.25rem;
+}
+
+.panel-card {
+  background-color: #262626;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid #393939;
+}
+
+.panel-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sql-editor-area {
+  font-family: var(--cds-font-family-mono);
+  font-size: 0.875rem;
+  background-color: #161616 !important;
+  color: #78a9ff !important;
+}
+
+.event-row-flash {
+  animation: flashHighlight 1.5s ease-out;
+}
+
+@keyframes flashHighlight {
+  0% { background-color: #0043ce; }
+  100% { background-color: transparent; }
+}
+
+.tab-pane-container {
+  padding-top: 1.25rem;
+}
+
+/* Stable Layout for SIEM SOC Log Stream */
+.soc-split-view {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.soc-table-column {
+  min-width: 0; /* Prevents CSS grid column blowout */
+}
+
+.soc-inspector-column {
+  min-width: 0;
+  position: sticky;
+  top: 64px;
+}
+
+.log-activity-panel {
+  background-color: #262626;
+  border: 1px solid #393939;
+  transition: all 0.2s ease-in-out;
+}
+
+.log-activity-panel.fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  margin: 0;
+  padding: 1.5rem;
+  background-color: #161616;
+  border: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-activity-panel.fullscreen .cds--data-table-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.log-activity-panel.fullscreen .log-table-scroll-wrapper {
+  max-height: calc(100vh - 220px);
+  flex: 1;
+}
+
+.log-table-scroll-wrapper {
+  max-height: 480px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.log-table-scroll-wrapper::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.log-table-scroll-wrapper::-webkit-scrollbar-thumb {
+  background-color: #525252;
+  border-radius: 3px;
+}
+
+/* Architecture Diagram Styling */
+.architecture-diagram-container {
+  background-color: #161616;
+  border-radius: 4px;
+  border: 1px solid #393939;
+  padding: 2rem !important;
+  overflow-x: auto;
+}
+
+.architecture-mermaid-wrapper {
+  width: 100%;
+  min-width: 1500px;
+  display: flex;
+  justify-content: center;
+
+  svg {
+    width: 100% !important;
+    max-width: 1800px !important;
+    min-height: 520px;
+    height: auto !important;
+
+    .node text, .node .label, .edgeLabel text, .edgeLabel .label, .cluster-label text, .cluster-label .label {
+      font-size: 11px !important;
+    }
+  }
+}
+
+/* ─── Query Detail Modal ─────────────────────────────────────────── */
+
+.query-detail-modal .cds--modal-container {
+  border-top: 3px solid var(--qd-border-color, #0f62fe);
+}
+
+/* Summary bar across the top of the modal body */
+.qd-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  background: #1e1e1e;
+  border: 1px solid #393939;
+  margin-bottom: 1.25rem;
+  padding: 0;
+  font-size: 0.8125rem;
+}
+
+.qd-summary-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.625rem 1rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.qd-summary-label {
+  font-size: 0.7rem;
+  color: #8d8d8d;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+}
+
+.qd-summary-value {
+  color: #f4f4f4;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.qd-summary-divider {
+  width: 1px;
+  background: #393939;
+  align-self: stretch;
+}
+
+/* Detail sections */
+.qd-section {
+  margin-bottom: 1.25rem;
+}
+
+.qd-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #c6c6c6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.625rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid #393939;
+}
+
+.qd-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.625rem;
+}
+
+/* Individual field tiles */
+.qd-field {
+  background: #1e1e1e;
+  border: 1px solid #2d2d2d;
+  padding: 0.625rem 0.75rem;
+  border-radius: 2px;
+}
+
+.qd-field--wide {
+  grid-column: 1 / -1;
+}
+
+.qd-field-label {
+  font-size: 0.7rem;
+  color: #8d8d8d;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
+.qd-field-value {
+  font-size: 0.8125rem;
+  color: #f4f4f4;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.qd-field-empty {
+  color: #525252;
+  font-style: italic;
+}
+
+/* SQL block */
+.qd-sql-block {
+  margin-top: 0.25rem;
+}
+
+/* Volume bar */
+.qd-volume-bar-wrap {
+  margin-top: 1rem;
+}
+
+.qd-volume-track {
+  height: 6px;
+  background: #393939;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 0.375rem;
+}
+
+.qd-volume-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  min-width: 2px;
+}
+
+.qd-volume-label {
+  font-size: 0.75rem;
+  color: #8d8d8d;
+}
+
+/* ─── Time window filter bar ────────────────────────────────────────── */
+
+.time-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  background: #1c1c1c;
+  border-bottom: 1px solid #393939;
+  font-size: 0.8125rem;
+}
+
+.time-filter-icon {
+  color: #78a9ff;
+  flex-shrink: 0;
+}
+
+.time-filter-label {
+  color: #8d8d8d;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  margin-right: 0.125rem;
+}
+
+/* Preset pill buttons */
+.time-pill {
+  appearance: none;
+  border: 1px solid #525252;
+  background: transparent;
+  color: #c6c6c6;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.625rem;
+  border-radius: 1rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  line-height: 1.4;
+
+  &:hover {
+    background: #353535;
+    border-color: #78a9ff;
+    color: #f4f4f4;
+  }
+
+  &.active {
+    background: #0f62fe;
+    border-color: #0f62fe;
+    color: #ffffff;
+    font-weight: 600;
+  }
+}
+
+/* Active window summary badge */
+.time-filter-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: #0043ce22;
+  border: 1px solid #0f62fe55;
+  color: #78a9ff;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 1rem;
+  white-space: nowrap;
+  margin-left: 0.25rem;
+}
+
+.time-filter-clear {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #78a9ff;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0;
+  margin-left: 0.125rem;
+
+  &:hover { color: #ffffff; }
+}
+
+/* Custom date-range row */
+.time-custom-range {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-left: 0.5rem;
+  flex-wrap: wrap;
+
+  /* Override Carbon DatePicker dark theme tints */
+  .cds--date-picker__input,
+  .cds--date-picker-input__wrapper > input {
+    background-color: #262626 !important;
+    color: #f4f4f4 !important;
+    border-bottom-color: #525252 !important;
+    font-size: 0.75rem;
+  }
+
+  .cds--label {
+    color: #8d8d8d;
+    font-size: 0.7rem;
+  }
+
+  /* Flatpickr calendar popup must sit above fullscreen panel */
+  .flatpickr-calendar {
+    z-index: 10002 !important;
+  }
+}
+
+/* Fullscreen: give the table more vertical room now that the filter bar is present */
+.log-activity-panel.fullscreen .log-table-scroll-wrapper {
+  max-height: calc(100vh - 260px);
+}

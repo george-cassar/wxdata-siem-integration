@@ -1,0 +1,48 @@
+{
+  "mcpServers": {
+    "bob-marketplace": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:39247/mcp",
+      "headers": {
+        "Bob-Marketplace-Token": "bob-marketplace-local"
+      },
+      "disabled": false,
+      "alwaysAllow": [
+        "search_assets",
+        "get_asset",
+        "list_installed"
+      ]
+    },
+    "techzone": {
+      "type": "streamable-http",
+      "url": "https://mcp.techzone.ibm.com/servers/c7442b81221647c3b36c75df4f2f88e8/mcp",
+      "headers": {
+        "TechZone-Token": "YOUR-TECHZONE-API-KEY-HERE"
+      },
+      "disabled": false,
+      "alwaysAllow": [
+        "documentation-mcp-techzone-search-content-docs",
+        "request-mcp-techzone-get-request",
+        "request-mcp-search-environments",
+        "platform-mcp-platform-get",
+        "platform-mcp-platform-list",
+        "collection-mcp-collection-get",
+        "collection-mcp-collection-list"
+      ]
+    },
+    "carbon-mcp": {
+      "type": "streamable-http",
+      "url": "https://mcp.carbondesignsystem.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR-CARBON-API-HERE",
+        "X-MCP-Session": "YOUR-SESSION-ID-HERE"
+      }
+    },
+    "watsonx-orchestrate-docs": {
+      "type": "streamable-http",
+      "url": "https://ibm-2e3153bf.main-kill-isr.mintlify.me/mcp",
+      "disabled": false,
+      "alwaysAllow": []
+    }
+  }
+}

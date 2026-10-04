@@ -1,0 +1,77 @@
+@use '@carbon/react';
+@use '@carbon/styles';
+
+:root {
+  --cds-font-family-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  --cds-font-family-mono: 'IBM Plex Mono', 'Menlo', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', Courier, monospace;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--cds-font-family-sans);
+  background-color: #161616;
+  color: #f4f4f4;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono-text {
+  font-family: var(--cds-font-family-mono);
+}
+
+.leef-packet-box {
+  background-color: #262626;
+  border-left: 4px solid #0f62fe;
+  padding: 1rem;
+  font-family: var(--cds-font-family-mono);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #82cfff;
+  border-radius: 2px;
+}
+
+.leef-packet-box.critical {
+  border-left-color: #da1e28;
+  color: #ffb3b8;
+}
+
+.leef-packet-box.high {
+  border-left-color: #ff832b;
+  color: #ffd9be;
+}
+
+.leef-packet-box.low {
+  border-left-color: #24a148;
+  color: #6fdc8c;
+}
+
+.offense-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+  border-radius: 2px;
+}
+
+.offense-pill.CRITICAL {
+  background-color: #da1e28;
+  color: #ffffff;
+}
+
+.offense-pill.HIGH {
+  background-color: #ff832b;
+  color: #161616;
+}
+
+.offense-pill.MEDIUM {
+  background-color: #f1c21b;
+  color: #161616;
+}
+
+.offense-pill.LOW {
+  background-color: #24a148;
+  color: #ffffff;
+}

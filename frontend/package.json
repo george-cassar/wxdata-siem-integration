@@ -1,0 +1,29 @@
+{
+  "name": "wxdata-siem-integration-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@carbon/charts-react": "^1.16.1",
+    "@carbon/charts": "^1.16.1",
+    "@carbon/icons-react": "^11.39.0",
+    "@carbon/react": "^1.59.0",
+    "@carbon/styles": "^1.59.0",
+    "axios": "^1.7.9",
+    "d3": "^7.9.0",
+    "mermaid": "^10.9.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "sass": "^1.77.8",
+    "vite": "^5.4.2"
+  }
+}
