@@ -1,8 +1,8 @@
-# IBM watsonx.data Presto ↔ SIEM Integration Demo
+# IBM watsonx.data Presto ↔ SIEM Integration
 
-Real-time SQL query audit logging, LEEF 2.0 / CEF packet transformation, and SIEM threat correlation for **IBM watsonx.data Presto** — runs **fully locally**, pulling live data from any remote Presto endpoint (IBM Cloud SaaS or on-prem watsonx.data).
+Real-time SQL query audit logging, multi-catalog metadata discovery, LEEF 2.0 / CEF packet transformation, and SIEM threat correlation for **IBM watsonx.data (Presto/Trino)** — runs **locally**, pulling live data from any remote Presto endpoint (IBM Cloud SaaS or on-prem watsonx.data / Cloud Pak for Data).
 
-> **Synthetic data disclaimer**: when running in mock mode all events, users, and query data are 100% synthetic. No real client data or PII is used or stored.
+> **Synthetic data disclaimer**: when running in mock mode, all events, users, and query data are 100% synthetic (Faker-generated). When running in live mode, only query **metadata** (user, SQL text, timestamps, duration, row counts) is fetched from Presto system tables — no table row data or PII is read or stored.
 
 ---
 
@@ -13,21 +13,34 @@ Real-time SQL query audit logging, LEEF 2.0 / CEF packet transformation, and SIE
 │  Developer Workstation (Local)                          │
 │                                                         │
 │  ┌──────────────────┐       ┌──────────────────────┐    │
-│  │  React frontend  │ ←───→ │  FastAPI backend     │    │
-│  │  localhost:3000  │  /api │  localhost:8000      │    │
-│  │  (Vite dev proxy)│       │  (uvicorn)           │    │
+│  │  React Frontend  │ ←───→ │  FastAPI Backend     │    │
+│  │  Carbon Design   │  /api │  uvicorn :8000       │    │
+│  │  localhost:3000  │  +WS  │  (Mock & Live engine)│    │
 │  └──────────────────┘       └──────────┬───────────┘    │
-│                                        │ HTTPS/TLS      │
+│                                        │ HTTPS / TLS    │
 └────────────────────────────────────────│────────────────┘
                                          │
-                              ┌──────────▼───────────────┐
-                              │  IBM watsonx.data Presto │
-                              │  (remote SaaS / on-prem) │
-                              │  port 443 or 8443        │
-                              └──────────────────────────┘
+                               ┌─────────▼────────────────┐
+                               │ IBM watsonx.data Presto  │
+                               │ (Cloud SaaS / On-Prem)   │
+                               │  • system.runtime.queries│
+                               │  • wxd_system_data audit │
+                               │  • Iceberg / Hive / Lake │
+                               └──────────────────────────┘
 ```
 
-The **Vite dev proxy** (`vite.config.js`) forwards all `/api` requests and the WebSocket (`/api/siem/ws`) from the browser to the local backend — no CORS issues, no extra configuration.
+The **Vite dev server** (`vite.config.js`) proxies `/api` and the real-time WebSocket (`/api/siem/ws`) to FastAPI on port 8000.
+
+---
+
+## Key Features
+
+- **Dual Mode Operation**: Seamlessly switch between `DEMO_MODE=mock` (instant synthetic data, zero external dependencies) and `DEMO_MODE=live` (real Presto connection).
+- **Dual Audit Retrieval**: Pulls live query executions concurrently from both in-memory `system.runtime.queries` and persistent `wxd_system_data.<diag_schema>.query_completed_event_view`.
+- **Full Catalog Hierarchy Discovery**: Concurrent fan-out discovery across all catalogs (`SHOW CATALOGS` → `SHOW SCHEMAS` → `SHOW TABLES`) with automated data sensitivity classification (`Restricted-PII`, `Restricted-Compliance`, `Confidential`, `Internal`).
+- **Real-Time SIEM Ingestion & Streaming**: Live WebSocket push (`/api/siem/ws`) streaming transformed **LEEF 2.0** (QRadar) and **CEF** (Splunk/Sentinel) audit logs to the UI.
+- **Threat Correlation & Offenses**: Real-time rule evaluation detecting mass data exfiltration (`RULE-WXD-1001`, MITRE T1005), unauthorized DDL / schema tampering (`RULE-WXD-1002`, MITRE T1485), excessive query frequency, and after-hours access.
+- **Carbon Design System UI**: Built with IBM `@carbon/react` featuring SOC Dashboard, Presto Query Studio, Threat Offenses, Compliance & Governance mapping, and Solution Architecture views.
 
 ---
 
@@ -118,39 +131,62 @@ Paste the result as `PRESTO_BEARER_TOKEN=` in `.env`.
 
 ---
 
-## Verifying Presto connectivity
+## Verifying Presto connectivity & API endpoints
 
 With the backend running:
 ```bash
-# Health check
+# Health check (shows mode, Presto target, connection status)
 curl http://localhost:8000/api/health
 
-# Discover real catalogs from your watsonx.data instance
+# SOC dashboard summary statistics
+curl http://localhost:8000/api/siem/summary
+
+# Discover real catalogs from watsonx.data
 curl http://localhost:8000/api/siem/catalog
 
-# Discover schemas in a catalog
+# Discover full catalog -> schema -> table hierarchy
+curl http://localhost:8000/api/siem/catalog/tree
+
+# Discover schemas in a specific catalog
 curl http://localhost:8000/api/siem/catalog/iceberg_data/schemas
 
-# Discover tables (with auto-classification)
+# Discover tables with data classification
 curl http://localhost:8000/api/siem/catalog/iceberg_data/schemas/finance/tables
 
-# Pull real query history from system.runtime.queries
+# Pull live audit query history (from system.runtime.queries & wxd_system_data)
 curl http://localhost:8000/api/siem/events?limit=5 | python3 -m json.tool
+
+# View active correlation rules and triggered offenses
+curl http://localhost:8000/api/siem/rules
+curl http://localhost:8000/api/siem/offenses
 ```
 
-The `source` field in event responses tells you whether data came from Presto (`"live"`) or the simulation fallback (`"simulated"`).
+The `source` field in responses indicates whether data was retrieved from Presto (`"live"`) or the deterministic simulation fallback (`"simulated"` / `"mock"`).
 
 ---
 
-## Demo Scenarios (Query Studio)
+## Demo Scenarios & Threat Detection Rules
 
-| Scenario | Risk | What it demonstrates |
-|---|---|---|
-| Standard BI Aggregation | LOW | Normal analyst query — LEEF event, no offense |
-| Mass Data Exfiltration | CRITICAL | `SELECT *` on PII table — triggers RULE-WXD-1001, MITRE T1005 |
-| Unauthorized DDL Drop | HIGH | `DROP TABLE` denied — triggers RULE-WXD-1002, MITRE T1485 |
+The Presto Query Studio provides preconfigured security scenarios demonstrating SIEM detection rules:
 
-In **live mode** these queries execute on your real Presto coordinator. In **mock mode** they use deterministic simulated results.
+| Rule ID | Scenario | Severity | MITRE ATT&CK | Description & Trigger Condition |
+|---|---|---|---|---|
+| `RULE-WXD-1001` | Mass Data Exfiltration | CRITICAL | T1005 (Data from Local System) | `SELECT *` without limit or row count > 10,000 on PII / sensitive tables |
+| `RULE-WXD-1002` | Unauthorized DDL Tampering | HIGH | T1485 (Data Destruction) | `DROP TABLE`, `ALTER TABLE`, or `TRUNCATE` operations on critical catalogs |
+| `RULE-WXD-1003` | Cross-Catalog Reconnaissance | MEDIUM | T1087 (Account Discovery) | Rapid enumeration across disparate catalogs (`SHOW CATALOGS`, `SHOW SCHEMAS`) |
+| `RULE-WXD-1004` | Privilege Escalation / Admin | HIGH | T1078 (Valid Accounts) | Execution of administrative commands / `system` catalog queries by non-admin users |
+| `RULE-WXD-1005` | After-Hours Access | MEDIUM | T1078.002 (Domain Accounts) | High-volume data queries executed outside normal business hours (20:00–06:00 UTC) |
+
+In **live mode** queries execute directly on the Presto coordinator. In **mock mode** queries use deterministic simulated execution results with realistic execution durations and byte counts.
+
+---
+
+## Technical Documentation & References
+
+Detailed design documents and technical deep dives are available in the [`docs/`](docs/) directory:
+
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**: Full architecture specification, sequence diagrams, LEEF 2.0 / CEF packet schemas, and component interaction models.
+- **[`docs/PRESTO_SQL_AUDIT_RETRIEVAL.md`](docs/PRESTO_SQL_AUDIT_RETRIEVAL.md)**: Technical reference explaining how Presto executed SQL history is retrieved from `system.runtime.queries` and `wxd_system_data.<diag_schema>.query_completed_event_view`, including REST protocol details, authentication flows, and data mapping.
 
 ---
 
@@ -158,47 +194,61 @@ In **live mode** these queries execute on your real Presto coordinator. In **moc
 
 ```bash
 # In .env:
-DEMO_MODE=mock   # fully synthetic, no Presto needed
-DEMO_MODE=live   # real Presto queries + system.runtime.queries history
+DEMO_MODE=mock   # fully synthetic, no Presto connection needed
+DEMO_MODE=live   # real Presto coordinator queries + system audit history
 ```
 
-The backend **always falls back** to simulation if Presto is unreachable — the demo never crashes.
+The backend **always falls back** gracefully to simulation if Presto is unreachable or credentials are unconfigured — the application and UI will continue operating seamlessly.
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
 .
 ├── backend/
-│   ├── main.py                         # FastAPI app entry
-│   ├── config.py                       # All settings (PRESTO_*, DEMO_MODE)
-│   ├── requirements.txt                # Python deps incl. trino
+│   ├── main.py                         # FastAPI app entry point & lifespan
+│   ├── config.py                       # Pydantic environment configuration
+│   ├── requirements.txt                # Python dependencies (trino, fastapi, uvicorn, faker, httpx)
 │   ├── routers/
-│   │   ├── health.py                   # /api/health
-│   │   ├── siem.py                     # /api/siem/* — events, execute, catalog
-│   │   └── scenarios.py               # /api/scenarios
+│   │   ├── health.py                   # /api/health endpoint
+│   │   ├── siem.py                     # /api/siem/* (events, catalog, execute, offenses, ws)
+│   │   └── scenarios.py               # /api/scenarios (predefined test scenarios)
 │   └── services/
-│       ├── presto_service.py           # Trino client + httpx fallback + simulation
-│       ├── watsonx_data_service.py     # system.runtime.queries → SIEM events
-│       ├── siem_service.py             # SIEM correlation rules engine
-│       └── synthetic_data_service.py  # Faker-based synthetic audit events
+│       ├── presto_service.py           # Trino client & httpx Presto REST executor + fallback
+│       ├── watsonx_data_service.py     # Presto system tables & wxd_system_data audit ingestion
+│       ├── siem_service.py             # SIEM correlation rules engine & offenses store
+│       └── synthetic_data_service.py  # Faker synthetic audit events generator & LEEF/CEF formatters
 ├── frontend/
-│   ├── vite.config.js                  # Vite dev server + /api proxy → :8000
+│   ├── vite.config.js                  # Vite dev server configuration + /api proxy
+│   ├── package.json                    # Frontend dependencies (@carbon/react, @carbon/icons-react)
 │   └── src/
-│       ├── pages/                      # Dashboard, QueryStudio, Offenses, ...
-│       ├── components/                 # KPICard, SOCChartPanel, PacketInspector
-│       ├── services/api.js             # Axios client + catalog endpoints
-│       └── context/DemoContext.jsx     # Global state + WebSocket
+│       ├── App.jsx                     # Root application shell with Carbon Header and SideNav
+│       ├── routes.jsx                  # React Router definitions
+│       ├── pages/
+│       │   ├── DashboardPage.jsx       # SIEM Log Activity & SOC Dashboard
+│       │   ├── QueryStudioPage.jsx     # Interactive Presto Query Studio
+│       │   ├── OffensesPage.jsx        # Threat Offenses & alert investigation
+│       │   ├── CompliancePage.jsx      # Compliance & Governance matrix (GDPR, HIPAA, PCI-DSS)
+│       │   └── ArchitecturePage.jsx    # Interactive architectural diagrams & packet flows
+│       ├── components/
+│       │   ├── DemoBanner.jsx          # Mode status and environment indicator
+│       │   ├── KPICard.jsx             # Metric KPI card
+│       │   ├── LogActivityTable.jsx    # Real-time event log table with filters
+│       │   ├── PacketInspector.jsx     # Side-by-side LEEF 2.0 / CEF / JSON viewer
+│       │   ├── QueryDetailModal.jsx    # Detailed query execution modal
+│       │   └── SOCChartPanel.jsx       # Event frequency and severity charts
+│       ├── services/api.js             # Axios client & API methods
+│       └── context/DemoContext.jsx     # Global React context & WebSocket live feed
+├── docs/
+│   ├── ARCHITECTURE.md                 # System architecture specification
+│   └── PRESTO_SQL_AUDIT_RETRIEVAL.md   # SQL query retrieval technical reference
 ├── scripts/
-│   ├── setup-local.sh                  # One-shot local setup script
-│   ├── configure.sh                    # Interactive environment configuration
-│   └── verify-demo.sh                  # Automated smoke test
-├── .env.example                        # Template for all configuration
-├── ARCHITECTURE.md                     # Solution architecture & component design
-├── DEMO_SCRIPT.md                      # Presenter talk track with timing
-├── PILOT_PLAN.md                       # 4-week Client Engineering pilot plan
-└── README.md                           # This file
+│   ├── setup-local.sh                  # One-shot automated local setup
+│   ├── configure.sh                    # Interactive CLI environment configuration
+│   └── verify-demo.sh                  # Automated health check and smoke test
+├── .env.example                        # Template environment variables
+└── README.md                           # This documentation
 ```
 
 ---
