@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import { getSiemSummary, getSiemEvents, getSiemOffenses, getScenarios } from '../services/api';
+import React, { createContext, useContext, useReducer, useEffect, useRef } from 'react';
+import { getSiemSummary, getSiemEvents, getSiemOffenses, getScenarios, getFrontendConfig } from '../services/api';
 
 const DemoContext = createContext();
 
@@ -39,9 +39,11 @@ function demoReducer(state, action) {
         loading: false
       };
     case 'ADD_LIVE_EVENT': {
-      const newEvents = [action.payload.event, ...state.events.slice(0, 49)];
+      const eventRing = action.payload._eventRingSize || 50;
+      const offenseRing = action.payload._offenseRingSize || 30;
+      const newEvents = [action.payload.event, ...state.events.slice(0, eventRing - 1)];
       const newOffenses = action.payload.offense
-        ? [action.payload.offense, ...state.offenses.slice(0, 29)]
+        ? [action.payload.offense, ...state.offenses.slice(0, offenseRing - 1)]
         : state.offenses;
       const newSummary = {
         ...state.summary,
@@ -71,12 +73,14 @@ function demoReducer(state, action) {
 
 export function DemoProvider({ children }) {
   const [state, dispatch] = useReducer(demoReducer, initialState);
+  // Ring-buffer sizes loaded from the backend config once on mount
+  const ringRef = useRef({ eventRingSize: 50, offenseRingSize: 30, initialEventCount: 30 });
 
   const refreshData = async () => {
     try {
       const [summary, events, offenses, scenarios] = await Promise.all([
         getSiemSummary(),
-        getSiemEvents(30),
+        getSiemEvents(ringRef.current.initialEventCount),
         getSiemOffenses(),
         getScenarios()
       ]);
@@ -94,7 +98,15 @@ export function DemoProvider({ children }) {
   };
 
   useEffect(() => {
-    refreshData();
+    // Fetch backend config first so ring sizes are set before the first WS message
+    getFrontendConfig()
+      .then((cfg) => {
+        if (cfg.wsEventRingSize) ringRef.current.eventRingSize = cfg.wsEventRingSize;
+        if (cfg.wsOffenseRingSize) ringRef.current.offenseRingSize = cfg.wsOffenseRingSize;
+        if (cfg.dashboardInitialEventCount) ringRef.current.initialEventCount = cfg.dashboardInitialEventCount;
+      })
+      .catch(() => {})
+      .finally(() => refreshData());
 
     // WebSocket live stream
     let ws;
@@ -109,7 +121,14 @@ export function DemoProvider({ children }) {
         try {
           const data = JSON.parse(msg.data);
           if (data.type === 'NEW_EVENT') {
-            dispatch({ type: 'ADD_LIVE_EVENT', payload: data });
+            dispatch({
+              type: 'ADD_LIVE_EVENT',
+              payload: {
+                ...data,
+                _eventRingSize: ringRef.current.eventRingSize,
+                _offenseRingSize: ringRef.current.offenseRingSize,
+              },
+            });
           }
         } catch (e) {
           console.error('WS Parse Error', e);

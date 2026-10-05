@@ -42,17 +42,26 @@ async def get_summary():
 @router.get("/events")
 async def get_events(limit: int = 50):
     """Returns recent Presto query audit events (real in live mode, synthetic in mock mode)."""
-    if not siem_engine.events:
-        # Prefer real Presto history in live mode
+    if settings.DEMO_MODE == "live":
+        # Always re-fetch in live mode so new queries are surfaced on every HTTP poll.
+        # (The in-memory store is still used by the WebSocket path and offenses.)
         live_events = await fetch_live_audit_history(limit)
         if live_events:
             for ev in reversed(live_events):
                 siem_engine.evaluate_event(ev)
-        else:
-            # Fall back to synthetic history
-            initial = get_initial_history(limit)
-            for ev in reversed(initial):
-                siem_engine.evaluate_event(ev)
+            return siem_engine.events[:limit]
+        # Presto unreachable — fall through to whatever is already in memory
+        if siem_engine.events:
+            return siem_engine.events[:limit]
+        # Nothing in memory either — seed with synthetic baseline
+        initial = get_initial_history(limit)
+        for ev in reversed(initial):
+            siem_engine.evaluate_event(ev)
+    elif not siem_engine.events:
+        # Mock mode: seed once, then serve from memory
+        initial = get_initial_history(limit)
+        for ev in reversed(initial):
+            siem_engine.evaluate_event(ev)
     return siem_engine.events[:limit]
 
 @router.get("/offenses")

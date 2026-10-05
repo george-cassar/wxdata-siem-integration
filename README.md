@@ -36,10 +36,13 @@ The **Vite dev server** (`vite.config.js`) proxies `/api` and the real-time WebS
 ## Key Features
 
 - **Dual Mode Operation**: Seamlessly switch between `DEMO_MODE=mock` (instant synthetic data, zero external dependencies) and `DEMO_MODE=live` (real Presto connection).
+- **All-user audit visibility**: Audit queries are issued with `X-Presto-User: ibmlhapiuser` (configurable via `PRESTO_AUDIT_USER`) to bypass the row-level security in `wxd_system_data` views and surface queries from every user, including LDAP-authenticated users.
+- **Time-bounded history fetch**: The `wxd_system_data` history query uses `WHERE create_time >= NOW() - INTERVAL N HOUR` (default 24 h, configurable via `AUDIT_HISTORY_HOURS`) so only the recent window is scanned — fast and guaranteed to include all queries visible in the Presto UI.
 - **Dual Audit Retrieval**: Pulls live query executions concurrently from both in-memory `system.runtime.queries` and persistent `wxd_system_data.<diag_schema>.query_completed_event_view`.
 - **Full Catalog Hierarchy Discovery**: Concurrent fan-out discovery across all catalogs (`SHOW CATALOGS` → `SHOW SCHEMAS` → `SHOW TABLES`) with automated data sensitivity classification (`Restricted-PII`, `Restricted-Compliance`, `Confidential`, `Internal`).
-- **Real-Time SIEM Ingestion & Streaming**: Live WebSocket push (`/api/siem/ws`) streaming transformed **LEEF 2.0** (QRadar) and **CEF** (Splunk/Sentinel) audit logs to the UI.
+- **Real-Time SIEM Ingestion & Streaming**: Live WebSocket push (`/api/siem/ws`) streaming transformed **LEEF 2.0** (QRadar) and **CEF** (Splunk/Sentinel) audit logs to the UI, with incremental delivery — only previously-unseen events are pushed.
 - **Threat Correlation & Offenses**: Real-time rule evaluation detecting mass data exfiltration (`RULE-WXD-1001`, MITRE T1005), unauthorized DDL / schema tampering (`RULE-WXD-1002`, MITRE T1485), excessive query frequency, and after-hours access.
+- **Zero hardcoded values**: Every tunable — thresholds, buffer sizes, vendor strings, user defaults, engine version — is driven by an environment variable with a documented default in `.env.example`.
 - **Carbon Design System UI**: Built with IBM `@carbon/react` featuring SOC Dashboard, Presto Query Studio, Threat Offenses, Compliance & Governance mapping, and Solution Architecture views.
 
 ---
@@ -73,10 +76,17 @@ PRESTO_USE_SSL=true
 PRESTO_SSL_VERIFY=false   # false for self-signed certificates
 
 # Authentication — choose ONE:
-PRESTO_USER=ibmacp
+PRESTO_USER=cpadmin
 PRESTO_PASSWORD=<your-password>
 # -- OR --
 PRESTO_BEARER_TOKEN=<cpd-jwt-token>
+
+# Audit identity — user sent in X-Presto-User for system/audit queries.
+# Must have global visibility in wxd_system_data views to see all users' queries.
+PRESTO_AUDIT_USER=ibmlhapiuser
+
+# How many hours of history to fetch (default 24)
+AUDIT_HISTORY_HOURS=24
 ```
 
 > **Don't have a watsonx.data instance yet?** Leave `DEMO_MODE=mock` — everything runs with synthetic data and no Presto connection is needed.
@@ -110,24 +120,34 @@ Find the watsonx.data Presto hostname in the **watsonx.data console** under **In
 
 **Common formats:**
 - IBM Cloud SaaS: `ibm-lh-presto-svc-cpd-<instance>.<apps-domain>` (port 443)
-- On-prem: `<presto-coordinator>.<namespace>.svc.cluster.local` (port 8443, Kubernetes DNS)
+- On-prem CP4D: `ibm-lh-lakehouse-presto-<id>-presto-svc.<apps-domain>` (port 443)
 
 ---
 
 ## Getting a Presto authentication token
 
 **Basic auth (simplest):**
-Use the watsonx.data admin username (`ibmacp`) and the password set during CP4D installation.
+Use the watsonx.data admin username (`cpadmin` or `ibmacp`) and the password set during CP4D installation.
 
 **JWT bearer token (preferred — no password exposure):**
 ```bash
 # From the CP4D token endpoint:
 curl -k -X POST https://<cpd-host>/icp4d-api/v1/authorize \
   -H "Content-Type: application/json" \
-  -d '{"username":"ibmacp","password":"<password>"}' \
+  -d '{"username":"cpadmin","password":"<password>"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])"
 ```
 Paste the result as `PRESTO_BEARER_TOKEN=` in `.env`.
+
+---
+
+## Why queries from other users were invisible
+
+On watsonx.data CP4D, the `wxd_system_data` diagnostic view and `system.runtime.queries` apply **row-level security based on `X-Presto-User`**: each request only returns rows where `user = X-Presto-User`, regardless of the Bearer token's privilege level.
+
+The `PRESTO_AUDIT_USER` setting (default `ibmlhapiuser`) controls the `X-Presto-User` header used **only** for these audit/system queries. `ibmlhapiuser` is the built-in CP4D service account that has global visibility across all users. The `Authorization: Bearer` token (from `PRESTO_USER`) continues to authenticate the HTTP request — the two are independent.
+
+Set `PRESTO_AUDIT_USER` to a user that holds the `Metastore Admin` or `Data Access` role on your CP4D deployment if `ibmlhapiuser` does not work.
 
 ---
 
@@ -137,6 +157,9 @@ With the backend running:
 ```bash
 # Health check (shows mode, Presto target, connection status)
 curl http://localhost:8000/api/health
+
+# Frontend-facing configuration defaults
+curl http://localhost:8000/api/config
 
 # SOC dashboard summary statistics
 curl http://localhost:8000/api/siem/summary
@@ -167,17 +190,88 @@ The `source` field in responses indicates whether data was retrieved from Presto
 
 ## Demo Scenarios & Threat Detection Rules
 
-The Presto Query Studio provides preconfigured security scenarios demonstrating SIEM detection rules:
+The Presto Query Studio provides preconfigured security scenarios demonstrating SIEM detection rules. SQL in scenarios uses `PRESTO_CATALOG` and `PRESTO_SCHEMA` from your `.env` — no hardcoded catalog names.
 
-| Rule ID | Scenario | Severity | MITRE ATT&CK | Description & Trigger Condition |
+| Rule ID | Scenario | Severity | MITRE ATT&CK | Trigger Condition |
 |---|---|---|---|---|
-| `RULE-WXD-1001` | Mass Data Exfiltration | CRITICAL | T1005 (Data from Local System) | `SELECT *` without limit or row count > 10,000 on PII / sensitive tables |
-| `RULE-WXD-1002` | Unauthorized DDL Tampering | HIGH | T1485 (Data Destruction) | `DROP TABLE`, `ALTER TABLE`, or `TRUNCATE` operations on critical catalogs |
-| `RULE-WXD-1003` | Cross-Catalog Reconnaissance | MEDIUM | T1087 (Account Discovery) | Rapid enumeration across disparate catalogs (`SHOW CATALOGS`, `SHOW SCHEMAS`) |
-| `RULE-WXD-1004` | Privilege Escalation / Admin | HIGH | T1078 (Valid Accounts) | Execution of administrative commands / `system` catalog queries by non-admin users |
-| `RULE-WXD-1005` | After-Hours Access | MEDIUM | T1078.002 (Domain Accounts) | High-volume data queries executed outside normal business hours (20:00–06:00 UTC) |
+| `RULE-WXD-1001` | Mass Data Exfiltration | CRITICAL | T1005 (Data from Local System) | Row count > `RULE_EXFIL_ROW_THRESHOLD` or bytes > `RULE_EXFIL_BYTES_THRESHOLD` on customer/PII tables |
+| `RULE-WXD-1002` | Unauthorized DDL Tampering | HIGH | T1485 (Data Destruction) | `DROP`, `ALTER`, or `TRUNCATE` resulting in `PERMISSION_DENIED` |
+| `RULE-WXD-1003` | Suspicious IP on Restricted Catalog | MEDIUM | T1078 (Valid Accounts) | Queries from `192.168.100.*` range against `kyc` tables |
+| `RULE-WXD-1004` | Unbounded Table Scan | MEDIUM | T1499 (Endpoint Denial of Service) | `WHERE 1=1` full table scan without partition filter |
 
-In **live mode** queries execute directly on the Presto coordinator. In **mock mode** queries use deterministic simulated execution results with realistic execution durations and byte counts.
+In **live mode** queries execute directly on the Presto coordinator. In **mock mode** queries use deterministic simulated execution results with realistic durations and byte counts.
+
+---
+
+## Configuration Reference
+
+All values are environment variables with defaults documented in [`.env.example`](.env.example). No value is hardcoded in source code.
+
+### Connection
+| Variable | Default | Description |
+|---|---|---|
+| `DEMO_MODE` | `mock` | `mock` = synthetic data; `live` = real Presto |
+| `PRESTO_HOST` | `localhost` | Presto coordinator hostname |
+| `PRESTO_PORT` | `8443` | Presto coordinator port |
+| `PRESTO_USER` | `ibmacp` | User whose Bearer token authenticates HTTP requests |
+| `PRESTO_PASSWORD` | *(empty)* | Exchanged for CP4D token if `PRESTO_BEARER_TOKEN` absent |
+| `PRESTO_BEARER_TOKEN` | *(empty)* | Pre-obtained CP4D JWT (preferred) |
+| `PRESTO_CPD_HOST` | *(empty)* | CP4D console host for token exchange (defaults to `PRESTO_HOST`) |
+| `PRESTO_CATALOG` | `iceberg_data` | Session default catalog |
+| `PRESTO_SCHEMA` | `finance` | Session default schema |
+| `PRESTO_USE_SSL` | `false` | Enable HTTPS |
+| `PRESTO_SSL_VERIFY` | `true` | Verify TLS certificate (`false` for self-signed) |
+
+### Audit Identity
+| Variable | Default | Description |
+|---|---|---|
+| `PRESTO_AUDIT_USER` | `ibmlhapiuser` | `X-Presto-User` for `system.runtime.queries` and `wxd_system_data` audit queries — must have global visibility to see all users' queries |
+| `AUDIT_HISTORY_HOURS` | `24` | Hours of history fetched from `wxd_system_data` per poll cycle |
+
+### Polling Behaviour
+| Variable | Default | Description |
+|---|---|---|
+| `PRESTO_POLL_WALL_LIMIT_S` | `75` | Hard wall-clock limit (seconds) for the httpx polling loop |
+| `PRESTO_POLL_INTERVAL_S` | `0.2` | Sleep between `nextUri` poll requests |
+| `PRESTO_MAX_ROWS_UI` | `500` | Maximum rows returned per query to the UI |
+| `PRESTO_SOURCE_TAG` | `watsonx-data-siem-demo` | Value sent in `X-Presto-Source` header |
+
+### Engine & SIEM Payload
+| Variable | Default | Description |
+|---|---|---|
+| `ENGINE_VERSION` | `Presto (Java) 0.286` | Engine string embedded in every audit event |
+| `CLUSTER_NAME` | *(empty)* | Cluster label in events (defaults to first segment of `PRESTO_HOST`) |
+| `CPU_TIME_MULTIPLIER` | `1.8` | Multiplier applied to `durationMs` to estimate `cpuTimeMs` |
+| `SIEM_VENDOR` | `IBM` | Vendor string in LEEF and CEF headers |
+| `SIEM_PRODUCT` | `watsonx.data` | Product string in LEEF and CEF headers |
+| `SIEM_PRODUCT_VERSION` | `2.0.1` | Product version in LEEF header |
+| `SIEM_CEF_SQL_SNIPPET_LEN` | `120` | Max SQL characters in the CEF `msg` field |
+| `SIEM_OFFENSE_SQL_SNIPPET_LEN` | `140` | Max SQL characters in a SIEM offense `sqlSnippet` |
+
+### Correlation Rules & Buffers
+| Variable | Default | Description |
+|---|---|---|
+| `RULE_EXFIL_ROW_THRESHOLD` | `100000` | Row count threshold for Rule 1001 (exfiltration) |
+| `RULE_EXFIL_BYTES_THRESHOLD` | `50000000` | Byte threshold for Rule 1001 |
+| `SIEM_EVENT_BUFFER_SIZE` | `500` | Backend in-memory event ring buffer |
+| `SIEM_OFFENSE_BUFFER_SIZE` | `30` | Backend in-memory offense ring buffer |
+| `OFFENSE_ID_PREFIX` | `SEC-OFF` | Prefix for generated offense IDs |
+| `OFFENSE_ID_START` | `101` | Starting numeric suffix for offense IDs |
+| `OFFENSE_ASSIGNED_ANALYST` | `SOC Tier 2 / Auto-Triage` | Assigned analyst label on new offenses |
+
+### Frontend & Dashboard
+| Variable | Default | Description |
+|---|---|---|
+| `DEFAULT_QUERY_USER` | `analyst_sarah` | Pre-filled user in the Query Studio |
+| `DEFAULT_QUERY_CLIENT_IP` | `10.244.12.45` | Pre-filled client IP in the Query Studio |
+| `DEFAULT_QUERY_SQL` | *(aggregation query)* | Pre-filled SQL in the Query Studio (`{catalog}` and `{schema}` are substituted at runtime) |
+| `DASHBOARD_INITIAL_EVENT_COUNT` | `30` | Events fetched on dashboard first load |
+| `WS_EVENT_RING_SIZE` | `50` | Client-side event ring buffer size |
+| `WS_OFFENSE_RING_SIZE` | `30` | Client-side offense ring buffer size |
+| `MOCK_BASELINE_EVENTS` | `1420` | Synthetic baseline added to KPI totals in mock mode |
+| `MOCK_BASELINE_BYTES` | `4820000000` | Synthetic baseline bytes in mock mode |
+| `MOCK_BASELINE_ROWS` | `12500000` | Synthetic baseline rows in mock mode |
+| `MOCK_BASELINE_EPS` | `14.2 eps` | Synthetic baseline events-per-second in mock mode |
 
 ---
 
@@ -186,7 +280,7 @@ In **live mode** queries execute directly on the Presto coordinator. In **mock m
 Detailed design documents and technical deep dives are available in the [`docs/`](docs/) directory:
 
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**: Full architecture specification, sequence diagrams, LEEF 2.0 / CEF packet schemas, and component interaction models.
-- **[`docs/PRESTO_SQL_AUDIT_RETRIEVAL.md`](docs/PRESTO_SQL_AUDIT_RETRIEVAL.md)**: Technical reference explaining how Presto executed SQL history is retrieved from `system.runtime.queries` and `wxd_system_data.<diag_schema>.query_completed_event_view`, including REST protocol details, authentication flows, and data mapping.
+- **[`docs/PRESTO_SQL_AUDIT_RETRIEVAL.md`](docs/PRESTO_SQL_AUDIT_RETRIEVAL.md)**: Technical reference explaining how Presto executed SQL history is retrieved from `system.runtime.queries` and `wxd_system_data.<diag_schema>.query_completed_event_view`, including REST protocol details, authentication flows, audit user identity, and data mapping.
 
 ---
 
@@ -208,10 +302,10 @@ The backend **always falls back** gracefully to simulation if Presto is unreacha
 .
 ├── backend/
 │   ├── main.py                         # FastAPI app entry point & lifespan
-│   ├── config.py                       # Pydantic environment configuration
+│   ├── config.py                       # Pydantic environment configuration (all settings)
 │   ├── requirements.txt                # Python dependencies (trino, fastapi, uvicorn, faker, httpx)
 │   ├── routers/
-│   │   ├── health.py                   # /api/health endpoint
+│   │   ├── health.py                   # /api/health + /api/config endpoints
 │   │   ├── siem.py                     # /api/siem/* (events, catalog, execute, offenses, ws)
 │   │   └── scenarios.py               # /api/scenarios (predefined test scenarios)
 │   └── services/
@@ -227,7 +321,7 @@ The backend **always falls back** gracefully to simulation if Presto is unreacha
 │       ├── routes.jsx                  # React Router definitions
 │       ├── pages/
 │       │   ├── DashboardPage.jsx       # SIEM Log Activity & SOC Dashboard
-│       │   ├── QueryStudioPage.jsx     # Interactive Presto Query Studio
+│       │   ├── QueryStudioPage.jsx     # Interactive Presto Query Studio (defaults from /api/config)
 │       │   ├── OffensesPage.jsx        # Threat Offenses & alert investigation
 │       │   ├── CompliancePage.jsx      # Compliance & Governance matrix (GDPR, HIPAA, PCI-DSS)
 │       │   └── ArchitecturePage.jsx    # Interactive architectural diagrams & packet flows
@@ -238,8 +332,8 @@ The backend **always falls back** gracefully to simulation if Presto is unreacha
 │       │   ├── PacketInspector.jsx     # Side-by-side LEEF 2.0 / CEF / JSON viewer
 │       │   ├── QueryDetailModal.jsx    # Detailed query execution modal
 │       │   └── SOCChartPanel.jsx       # Event frequency and severity charts
-│       ├── services/api.js             # Axios client & API methods
-│       └── context/DemoContext.jsx     # Global React context & WebSocket live feed
+│       ├── services/api.js             # Axios client & API methods (incl. getFrontendConfig)
+│       └── context/DemoContext.jsx     # Global React context, WebSocket live feed & ring buffers
 ├── docs/
 │   ├── ARCHITECTURE.md                 # System architecture specification
 │   └── PRESTO_SQL_AUDIT_RETRIEVAL.md   # SQL query retrieval technical reference
@@ -247,7 +341,7 @@ The backend **always falls back** gracefully to simulation if Presto is unreacha
 │   ├── setup-local.sh                  # One-shot automated local setup
 │   ├── configure.sh                    # Interactive CLI environment configuration
 │   └── verify-demo.sh                  # Automated health check and smoke test
-├── .env.example                        # Template environment variables
+├── .env.example                        # Template with all environment variables documented
 └── README.md                           # This documentation
 ```
 
@@ -255,4 +349,4 @@ The backend **always falls back** gracefully to simulation if Presto is unreacha
 
 ## Synthetic Data Disclaimer
 
-This demonstration environment uses 100% synthetic data generated for simulation purposes. No real client data, PII, or confidential credentials are used or stored. When connecting to a real watsonx.data instance, only query **metadata** (user, duration, SQL text, row counts) from `system.runtime.queries` is pulled — no actual table row data is read or stored by this application.
+This demonstration environment uses 100% synthetic data generated for simulation purposes in mock mode. No real client data, PII, or confidential credentials are used or stored. When connecting to a real watsonx.data instance in live mode, only query **metadata** (user, duration, SQL text, row counts) from `system.runtime.queries` and `wxd_system_data` is pulled — no actual table row data is read or stored by this application.

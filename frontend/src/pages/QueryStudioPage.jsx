@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   TextArea,
   Button,
@@ -17,7 +17,7 @@ import {
 } from '@carbon/react';
 import { Play, Flash, Security, WarningAlt, CheckmarkFilled } from '@carbon/icons-react';
 import { useDemo } from '../context/DemoContext';
-import { executeQuery } from '../services/api';
+import { executeQuery, getFrontendConfig } from '../services/api';
 import PacketInspector from '../components/PacketInspector';
 
 export default function QueryStudioPage() {
@@ -25,11 +25,20 @@ export default function QueryStudioPage() {
   const { scenarios } = state;
 
   const [selectedScenarioId, setSelectedScenarioId] = useState('scenario-1');
-  const [sqlText, setSqlText] = useState(
-    "SELECT customer_region, count(*) as tx_count, sum(amount) as total_volume_usd\nFROM iceberg_data.finance.transactions\nGROUP BY customer_region"
-  );
-  const [currentUser, setCurrentUser] = useState('analyst_sarah');
-  const [clientIp, setClientIp] = useState('10.244.12.45');
+  const [sqlText, setSqlText] = useState('');
+  const [currentUser, setCurrentUser] = useState('');
+  const [clientIp, setClientIp] = useState('');
+
+  // Load defaults from the backend on first render so no values are hardcoded here.
+  useEffect(() => {
+    getFrontendConfig()
+      .then((cfg) => {
+        setSqlText((prev) => prev || cfg.defaultQuerySql || '');
+        setCurrentUser((prev) => prev || cfg.defaultQueryUser || '');
+        setClientIp((prev) => prev || cfg.defaultQueryClientIp || '');
+      })
+      .catch(() => {});
+  }, []);
   const [running, setRunning] = useState(false);
   const [lastResult, setLastResult] = useState(null);
   const [execError, setExecError] = useState(null);

@@ -2,14 +2,22 @@ import datetime
 import uuid
 from typing import Dict, Any, List, Optional
 
+from backend.config import settings
+
 RULES = [
     {
         "id": "RULE-WXD-1001",
         "name": "Mass Data Retrieval / Exfiltration Warning",
-        "description": "Triggered when a single query reads > 100,000 rows or > 50MB of data from sensitive/PII tables.",
+        "description": (
+            f"Triggered when a single query reads > {settings.RULE_EXFIL_ROW_THRESHOLD:,} rows "
+            f"or > {settings.RULE_EXFIL_BYTES_THRESHOLD // 1_000_000} MB of data from sensitive/PII tables."
+        ),
         "severity": "CRITICAL",
         "mitre_technique": "T1005 - Data from Local System",
-        "threshold": {"rows": 100000, "bytes": 50000000},
+        "threshold": {
+            "rows": settings.RULE_EXFIL_ROW_THRESHOLD,
+            "bytes": settings.RULE_EXFIL_BYTES_THRESHOLD,
+        },
         "category": "Data Exfiltration"
     },
     {
@@ -47,17 +55,22 @@ class SIEMEngine:
     def evaluate_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Evaluates incoming Presto audit event against SIEM correlation rules."""
         self.events.insert(0, event)
-        if len(self.events) > 500:
+        if len(self.events) > settings.SIEM_EVENT_BUFFER_SIZE:
             self.events.pop()
 
         triggered_rule = None
-        
+
         # Rule 1001: Data Exfiltration
-        if (event.get("rowsScanned", 0) >= 100000 or event.get("bytesScanned", 0) >= 50000000) and "customer" in event.get("sqlText", "").lower():
+        if (
+            event.get("rowsScanned", 0) >= settings.RULE_EXFIL_ROW_THRESHOLD
+            or event.get("bytesScanned", 0) >= settings.RULE_EXFIL_BYTES_THRESHOLD
+        ) and "customer" in event.get("sqlText", "").lower():
             triggered_rule = self.rules[0]
-            
+
         # Rule 1002: Unauthorized DDL
-        elif event.get("status") == "FAILED" and any(k in event.get("sqlText", "").upper() for k in ["DROP", "ALTER", "TRUNCATE"]):
+        elif event.get("status") == "FAILED" and any(
+            k in event.get("sqlText", "").upper() for k in ["DROP", "ALTER", "TRUNCATE"]
+        ):
             triggered_rule = self.rules[1]
 
         # Rule 1003: External/Suspicious IP on Restricted Catalogs
@@ -69,8 +82,10 @@ class SIEMEngine:
             triggered_rule = self.rules[3]
 
         if triggered_rule:
+            snippet_len = settings.SIEM_OFFENSE_SQL_SNIPPET_LEN
+            sql_text = event["sqlText"]
             offense = {
-                "offenseId": f"SEC-OFF-{len(self.offenses) + 101}",
+                "offenseId": f"{settings.OFFENSE_ID_PREFIX}-{len(self.offenses) + settings.OFFENSE_ID_START}",
                 "ruleId": triggered_rule["id"],
                 "ruleName": triggered_rule["name"],
                 "severity": triggered_rule["severity"],
@@ -80,9 +95,9 @@ class SIEMEngine:
                 "sourceUser": event["user"],
                 "sourceIp": event["clientIp"],
                 "queryId": event["queryId"],
-                "sqlSnippet": event["sqlText"][:140] + ("..." if len(event["sqlText"]) > 140 else ""),
+                "sqlSnippet": sql_text[:snippet_len] + ("..." if len(sql_text) > snippet_len else ""),
                 "status": "OPEN",
-                "assignedAnalyst": "SOC Tier 2 / Auto-Triage",
+                "assignedAnalyst": settings.OFFENSE_ASSIGNED_ANALYST,
                 "evidence": {
                     "rowsProcessed": event.get("rowsScanned"),
                     "bytesScanned": event.get("bytesScanned"),
@@ -91,6 +106,8 @@ class SIEMEngine:
                 }
             }
             self.offenses.insert(0, offense)
+            if len(self.offenses) > settings.SIEM_OFFENSE_BUFFER_SIZE:
+                self.offenses.pop()
             return offense
 
         return None
@@ -119,7 +136,9 @@ class SIEMEngine:
             ]
             eps = f"{len(recent) / 60:.1f} eps" if recent else "0.0 eps"
         else:
-            eps = "0.0 eps" if live_mode else "14.2 eps"
+            eps = "0.0 eps" if live_mode else settings.MOCK_BASELINE_EPS
+
+        engine_status = f"HEALTHY ({settings.ENGINE_VERSION})"
 
         if live_mode:
             return {
@@ -129,18 +148,18 @@ class SIEMEngine:
                 "highOffenses": high_count,
                 "totalVolumeScannedBytes": total_bytes,
                 "totalRowsProcessed": total_rows,
-                "engineStatus": "HEALTHY (Presto Java 0.286)",
+                "engineStatus": engine_status,
                 "leefStreamRate": eps,
             }
         else:
             return {
-                "totalAuditEvents": total_events + 1420,
+                "totalAuditEvents": total_events + settings.MOCK_BASELINE_EVENTS,
                 "activeOffenses": total_offenses,
                 "criticalOffenses": critical_count,
                 "highOffenses": high_count,
-                "totalVolumeScannedBytes": total_bytes + 4820000000,
-                "totalRowsProcessed": total_rows + 12500000,
-                "engineStatus": "HEALTHY (Presto Java 0.286)",
+                "totalVolumeScannedBytes": total_bytes + settings.MOCK_BASELINE_BYTES,
+                "totalRowsProcessed": total_rows + settings.MOCK_BASELINE_ROWS,
+                "engineStatus": engine_status,
                 "leefStreamRate": eps,
             }
 

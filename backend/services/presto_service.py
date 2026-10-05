@@ -98,7 +98,7 @@ def _build_headers(user: str, catalog: Optional[str] = None, schema: Optional[st
         "X-Presto-User": user,
         "X-Presto-Catalog": catalog or settings.PRESTO_CATALOG,
         "X-Presto-Schema": schema or settings.PRESTO_SCHEMA,
-        "X-Presto-Source": "watsonx-data-siem-demo",
+        "X-Presto-Source": settings.PRESTO_SOURCE_TAG,
         "Content-Type": "text/plain",
     }
     token = _get_cpd_token()
@@ -119,10 +119,6 @@ def _ssl_context():
 # ---------------------------------------------------------------------------
 # httpx Presto REST polling client
 # ---------------------------------------------------------------------------
-
-# Maximum wall-clock seconds allowed for the entire polling loop.
-# Keeps the FastAPI request well inside the browser's 90 s axios timeout.
-_POLL_WALL_LIMIT_S = 75.0
 
 async def _execute_via_httpx(
     sql: str, user: str,
@@ -157,7 +153,7 @@ async def _execute_via_httpx(
     error_code: Optional[str] = None
     error_msg: Optional[str] = None
     start_ms = int(time.time() * 1000)
-    wall_deadline = time.time() + _POLL_WALL_LIMIT_S
+    wall_deadline = time.time() + settings.PRESTO_POLL_WALL_LIMIT_S
 
     async with httpx.AsyncClient(verify=ssl_verify, timeout=30.0) as client:
         # Submit query
@@ -202,7 +198,7 @@ async def _execute_via_httpx(
             if time.time() >= wall_deadline:
                 logger.warning(
                     "Presto poll exceeded %ss wall limit; returning partial results "
-                    "(state=%s, rows=%d)", _POLL_WALL_LIMIT_S, state, len(all_rows)
+                    "(state=%s, rows=%d)", settings.PRESTO_POLL_WALL_LIMIT_S, state, len(all_rows)
                 )
                 status = state if state else "RUNNING"
                 break
@@ -213,7 +209,7 @@ async def _execute_via_httpx(
             if next_uri and not next_uri.startswith("http"):
                 next_uri = f"{base_url}{next_uri}"
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(settings.PRESTO_POLL_INTERVAL_S)
             resp = await client.get(next_uri, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -320,7 +316,7 @@ class PrestoExecutor:
                     "clientIp": client_ip,
                     "durationMs": duration_ms,
                     "columns": columns,
-                    "data": rows[:500],  # cap returned rows for UI safety
+                    "data": rows[:settings.PRESTO_MAX_ROWS_UI],
                     "rowCount": len(rows),
                     "errorCode": error_code,
                     "errorMessage": error_msg,

@@ -3,6 +3,8 @@ import uuid
 import datetime
 from typing import Dict, Any, List
 
+from backend.config import settings
+
 # Seed for reproducible synthetic audit logs
 random.seed(42)
 
@@ -105,22 +107,26 @@ def generate_synthetic_event(scenario_override: Dict[str, Any] = None) -> Dict[s
     sql_text = template.get("sql", "SELECT 1")
     
     # Extract target catalog/schema if possible
-    catalog = "iceberg_data"
-    schema = "finance"
+    catalog = settings.PRESTO_CATALOG
+    schema = settings.PRESTO_SCHEMA
     if "hive_lake" in sql_text:
         catalog = "hive_lake"
         schema = "analytics"
 
+    cluster = settings.CLUSTER_NAME or (
+        settings.PRESTO_HOST.split(".")[0] if settings.PRESTO_HOST else "watsonx-data"
+    )
+
     event = {
         "eventId": str(uuid.uuid4()),
         "queryId": query_id,
-        "engine": "Presto (Java) 0.286",
-        "cluster": "watsonx-data-local",
+        "engine": settings.ENGINE_VERSION,
+        "cluster": cluster,
         "timestamp": now.isoformat(),
         "createdTime": start_time.isoformat(),
         "endTime": now.isoformat(),
         "durationMs": duration_ms,
-        "cpuTimeMs": int(duration_ms * 1.8),
+        "cpuTimeMs": int(duration_ms * settings.CPU_TIME_MULTIPLIER),
         "user": user_info["user"],
         "userRole": user_info["role"],
         "clientIp": user_info["ip"],
@@ -149,9 +155,9 @@ def format_as_leef(event: Dict[str, Any]) -> str:
     """Formats event to IBM LEEF (Log Event Extended Format) 2.0 standard for QRadar."""
     headers = [
         "LEEF:2.0",
-        "IBM",
-        "watsonx.data",
-        "2.0.1",
+        settings.SIEM_VENDOR,
+        settings.SIEM_PRODUCT,
+        settings.SIEM_PRODUCT_VERSION,
         event.get("queryType", "QueryExecution"),
         "\t"  # delimiter
     ]
@@ -182,7 +188,12 @@ def format_as_leef(event: Dict[str, Any]) -> str:
 
 def format_as_cef(event: Dict[str, Any]) -> str:
     """Formats event to ArcSight / Sentinel / Splunk Common Event Format (CEF)."""
-    cef_header = f"CEF:0|IBM|watsonx.data|2.0|{event['queryType']}|Presto SQL Audit Event|{1 if event['riskLevel'] == 'LOW' else 7 if event['riskLevel'] == 'HIGH' else 10}"
+    _CEF_SEVERITY = {"LOW": 1, "MEDIUM": 5, "HIGH": 7, "CRITICAL": 10}
+    severity = _CEF_SEVERITY.get(event.get("riskLevel", "LOW"), 1)
+    cef_header = (
+        f"CEF:0|{settings.SIEM_VENDOR}|{settings.SIEM_PRODUCT}|2.0"
+        f"|{event['queryType']}|Presto SQL Audit Event|{severity}"
+    )
     cef_ext = (
         f"rt={event['timestamp']} suser={event['user']} src={event['clientIp']} "
         f"cs1Label=QueryID cs1={event['queryId']} "
@@ -190,7 +201,7 @@ def format_as_cef(event: Dict[str, Any]) -> str:
         f"cs3Label=Status cs3={event['status']} "
         f"cn1Label=RowsProcessed cn1={event['rowsScanned']} "
         f"cn2Label=BytesScanned cn2={event['bytesScanned']} "
-        f"msg={event['sqlText'][:120]}"
+        f"msg={event['sqlText'][:settings.SIEM_CEF_SQL_SNIPPET_LEN]}"
     )
     return f"{cef_header}|{cef_ext}"
 

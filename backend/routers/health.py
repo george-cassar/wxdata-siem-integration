@@ -28,3 +28,19 @@ async def health_check():
     else:
         base["disclaimer"] = "All queries and log event streams contain synthetic data only."
     return base
+
+
+@router.get("/config")
+async def get_frontend_config():
+    """Exposes backend-configured defaults consumed by the frontend Query Studio."""
+    return {
+        "defaultQueryUser": settings.DEFAULT_QUERY_USER,
+        "defaultQueryClientIp": settings.DEFAULT_QUERY_CLIENT_IP,
+        "defaultQuerySql": settings.DEFAULT_QUERY_SQL.format(
+            catalog=settings.PRESTO_CATALOG,
+            schema=settings.PRESTO_SCHEMA,
+        ),
+        "wsEventRingSize": settings.WS_EVENT_RING_SIZE,
+        "wsOffenseRingSize": settings.WS_OFFENSE_RING_SIZE,
+        "dashboardInitialEventCount": settings.DASHBOARD_INITIAL_EVENT_COUNT,
+    }

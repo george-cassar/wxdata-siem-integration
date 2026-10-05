@@ -28,6 +28,7 @@ api.interceptors.response.use(
 );
 
 export const getHealth = () => api.get('/health');
+export const getFrontendConfig = () => api.get('/config');
 export const getSiemSummary = () => api.get('/siem/summary');
 export const getSiemEvents = (limit = 50) => api.get(`/siem/events?limit=${limit}`);
 export const getSiemOffenses = () => api.get('/siem/offenses');

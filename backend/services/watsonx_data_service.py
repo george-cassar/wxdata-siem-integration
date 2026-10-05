@@ -32,7 +32,8 @@ from backend.services.synthetic_data_service import format_as_leef, format_as_ce
 
 logger = logging.getLogger("watsonx_data_service")
 
-# Catalogs that are always internal to Presto/Trino — never user data
+# Catalogs that are always internal to Presto/Trino — never user data.
+# Populated from settings so operators can extend the list without code changes.
 _INTERNAL_CATALOGS = {"jmx", "tpcds", "tpch"}
 # Schemas that exist in every catalog but contain no user tables
 _INTERNAL_SCHEMAS = {"information_schema"}
@@ -211,11 +212,14 @@ LIMIT {limit}
 #   cluster_name, query_id, query_state, create_time, end_time, wallTimeMillis,
 #   user, catalog, schema, query, total_rows, total_bytes, error_code, failure_message
 #
-# PERFORMANCE NOTE: ORDER BY create_time DESC forces Presto to scan all 10k+
-# rows before returning any, taking 60+ s.  We use NO ORDER BY so Presto can
-# emit the first LIMIT rows immediately (~3 s), then sort client-side in Python.
-# We also fetch a larger batch (limit * 4) so the client-side sort has a
-# meaningful pool of rows to pick "most recent" from.
+# PERFORMANCE NOTE: A bare LIMIT without WHERE returns an arbitrary first page
+# of physically stored rows (typically the oldest), not the most recent queries.
+# We filter by create_time >= NOW() - INTERVAL so Presto only scans the recent
+# time range — this is fast (~2-3 s) AND guaranteed to include all recent queries
+# regardless of which physical block they land in.
+# The configurable AUDIT_HISTORY_HOURS window (default 24 h) is wide enough to
+# catch any query visible in the Presto UI while keeping the scan cheap.
+# We still sort client-side in Python to avoid the expensive ORDER BY full-scan.
 _WXD_HISTORY_SQL = """
 SELECT
     query_id,
@@ -233,6 +237,7 @@ SELECT
     error_code,
     failure_message
 FROM {full_table}
+WHERE create_time >= NOW() - INTERVAL '{hours}' HOUR
 LIMIT {fetch_limit}
 """
 
@@ -373,16 +378,19 @@ def _build_event(
 ) -> Dict[str, Any]:
     """Assembles the canonical SIEM audit event dict used by both converters."""
     sql_u = sql_text.upper()
+    cluster = settings.CLUSTER_NAME or (
+        settings.PRESTO_HOST.split(".")[0] if settings.PRESTO_HOST else "watsonx-data"
+    )
     event: Dict[str, Any] = {
         "eventId":     str(uuid.uuid4()),
         "queryId":     query_id,
-        "engine":      "Presto (Java) 0.286",
-        "cluster":     settings.PRESTO_HOST.split(".")[0] if settings.PRESTO_HOST else "watsonx-data",
+        "engine":      settings.ENGINE_VERSION,
+        "cluster":     cluster,
         "timestamp":   ts_end.isoformat(),
         "createdTime": ts_start.isoformat(),
         "endTime":     ts_end.isoformat(),
         "durationMs":  duration_ms,
-        "cpuTimeMs":   int(wall_ms * 1.8),
+        "cpuTimeMs":   int(wall_ms * settings.CPU_TIME_MULTIPLIER),
         "user":        user,
         "userRole":    _infer_role(user),
         "clientIp":    _infer_ip(user),
@@ -433,6 +441,13 @@ def _assess_risk(sql_u: str, state: str):
     # DDL destruction / privilege ops — highest priority
     if any(k in sql_u for k in ("DROP ", "ALTER ", "TRUNCATE ")):
         return "HIGH", "Unauthorized DDL Attempt", 0, 1024
+    # Metadata / introspection — SHOW, DESCRIBE, EXPLAIN, SHOW CREATE TABLE,
+    # and information_schema column/table queries.  Always LOW risk, no scan.
+    if (
+        sql_u.lstrip().startswith(("SHOW ", "DESCRIBE ", "EXPLAIN "))
+        or "INFORMATION_SCHEMA" in sql_u
+    ):
+        return "LOW", "Metadata Introspection", 0, 0
     # CREATE (incl. CREATE TABLE AS SELECT) — must come before SELECT-wildcard rules
     if sql_u.lstrip().startswith("CREATE"):
         return "LOW", "DDL Object Creation", 0, 1024
@@ -452,9 +467,13 @@ def _assess_risk(sql_u: str, state: str):
 def _extract_catalog_schema(sql: str):
     """Best-effort extraction of catalog.schema from a SQL statement.
 
-    Handles both quoted identifiers ("catalog"."schema"."table") and
-    unquoted identifiers (catalog.schema.table), as well as mixed forms.
-    Returns the first three-part name found, or the configured defaults.
+    Handles:
+      1. Quoted three-part identifiers: "catalog"."schema"."table"
+      2. Unquoted three-part identifiers: catalog.schema.table
+      3. information_schema queries: WHERE table_catalog = 'x' AND table_schema = 'y'
+      4. SHOW CREATE TABLE "catalog"."schema"."table"
+
+    Returns the first match found, or the configured session defaults.
     """
     import re
 
@@ -471,13 +490,24 @@ def _extract_catalog_schema(sql: str):
         # Groups: (1,2) = catalog, (3,4) = schema, (5,6) = table
         catalog_val = m.group(1) or m.group(2)  # prefer quoted, fallback unquoted
         schema_val  = m.group(3) or m.group(4)
-        if catalog_val and schema_val:
+        # Skip if the matched three-part name is an internal system path
+        if catalog_val and schema_val and catalog_val.lower() not in (
+            "information_schema", "system", "jmx", "tpcds", "tpch"
+        ):
             return catalog_val, schema_val
 
     # ── Unquoted only (fast path for plain identifiers) ────────────────────
     matches = re.findall(r'\b([\w]+)\.([\w]+)\.[\w]+', sql, re.IGNORECASE)
-    if matches:
-        return matches[0][0], matches[0][1]
+    for cat, sch in matches:
+        if cat.lower() not in ("information_schema", "system", "jmx", "tpcds", "tpch"):
+            return cat, sch
+
+    # ── information_schema queries: extract catalog/schema from WHERE clause ─
+    # e.g. WHERE table_catalog = 'lab_catalog01' AND table_schema = 'retail'
+    cat_m = re.search(r"table_catalog\s*=\s*'([^']+)'", sql, re.IGNORECASE)
+    sch_m = re.search(r"table_schema\s*=\s*'([^']+)'", sql, re.IGNORECASE)
+    if cat_m:
+        return cat_m.group(1), sch_m.group(1) if sch_m else settings.PRESTO_SCHEMA
 
     return settings.PRESTO_CATALOG, settings.PRESTO_SCHEMA
 
@@ -491,6 +521,9 @@ def _infer_role(user: str) -> str:
         "service": "Service Account",
         "bot": "Automation Bot",
         "contractor": "External Consultant",
+        # LDAP-provisioned users (e.g. prueba-user1, ldap-user2)
+        "prueba": "LDAP User",
+        "ldap": "LDAP User",
     }
     u = user.lower()
     for key, role in mapping.items():
@@ -567,6 +600,13 @@ async def fetch_live_audit_history(limit: int = 50, only_new: bool = False) -> L
     if settings.DEMO_MODE != "live" or settings.PRESTO_HOST in ("localhost", "127.0.0.1"):
         return []
 
+    # The X-Presto-User for system/audit queries.  On watsonx.data CP4D the
+    # wxd_system_data diagnostic view applies row-level security keyed on this
+    # header: it only returns rows where user = X-Presto-User.  Using the
+    # built-in ibmlhapiuser (or whichever user has global visibility) bypasses
+    # the per-user filter and returns ALL users' queries.
+    audit_user = settings.PRESTO_AUDIT_USER or settings.PRESTO_USER
+
     # ------------------------------------------------------------------ #
     # 1. Discover the wxd_system_data diagnostic schema (cached after     #
     #    first successful call — one SHOW SCHEMAS per process lifetime).  #
@@ -575,14 +615,15 @@ async def fetch_live_audit_history(limit: int = 50, only_new: bool = False) -> L
         try:
             r = await presto_executor.execute_query(
                 "SHOW SCHEMAS FROM wxd_system_data",
-                user=settings.PRESTO_USER,
+                user=audit_user,
                 catalog="wxd_system_data",
                 schema="",
             )
             schemas = [row[0] for row in r.get("data", []) if row]
             diag = next((s for s in schemas if "diag" in s.lower()), None)
             _wxd_diag_schema_cache = diag or ""
-            logger.info("wxd_system_data diag schema discovered: %r", _wxd_diag_schema_cache)
+            logger.info("wxd_system_data diag schema discovered: %r (audit_user=%s)",
+                        _wxd_diag_schema_cache, audit_user)
         except Exception as exc:
             logger.warning("Could not discover wxd diag schema: %s", exc)
             _wxd_diag_schema_cache = ""
@@ -597,7 +638,7 @@ async def fetch_live_audit_history(limit: int = 50, only_new: bool = False) -> L
             fetch_limit = limit * 4
             r = await presto_executor.execute_query(
                 _RUNTIME_QUERIES_SQL.format(limit=fetch_limit),
-                user=settings.PRESTO_USER,
+                user=audit_user,
                 catalog="system",
                 schema="runtime",
             )
@@ -624,12 +665,15 @@ async def fetch_live_audit_history(limit: int = 50, only_new: bool = False) -> L
             return []
         # Quote the schema name — it contains dots/hyphens on watsonx.data CP4D
         full_table = f'wxd_system_data."{_wxd_diag_schema_cache}".query_completed_event_view'
-        # Fetch more rows than we need so client-side sort has a meaningful pool
         fetch_limit = limit * 4
         try:
             r = await presto_executor.execute_query(
-                _WXD_HISTORY_SQL.format(full_table=full_table, fetch_limit=fetch_limit),
-                user=settings.PRESTO_USER,
+                _WXD_HISTORY_SQL.format(
+                    full_table=full_table,
+                    hours=settings.AUDIT_HISTORY_HOURS,
+                    fetch_limit=fetch_limit,
+                ),
+                user=audit_user,
                 catalog="wxd_system_data",
                 schema=_wxd_diag_schema_cache,
             )
@@ -639,10 +683,13 @@ async def fetch_live_audit_history(limit: int = 50, only_new: bool = False) -> L
             events = [ev for ev in (_wxd_row_to_event(row, cols) for row in r.get("data", [])) if ev]
             # Sort newest-first in Python (avoids ORDER BY in Presto)
             events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
-            logger.info("wxd_history: %d events fetched (fetch_limit=%d)", len(events), fetch_limit)
+            logger.info(
+                "wxd_history: %d events in last %dh (fetch_limit=%d)",
+                len(events), settings.AUDIT_HISTORY_HOURS, fetch_limit,
+            )
             return events[:limit]
         except Exception as exc:
-            logger.debug("fetch_wxd_history failed: %s", exc)
+            logger.warning("fetch_wxd_history failed: %s", exc)
             return []
 
     # ------------------------------------------------------------------ #
@@ -671,12 +718,17 @@ async def fetch_live_audit_history(limit: int = 50, only_new: bool = False) -> L
     # ------------------------------------------------------------------ #
     if only_new:
         new_events = [e for e in merged if e.get("queryId") not in _seen_query_ids]
-        _seen_query_ids.update(e.get("queryId") for e in new_events)
-        logger.info("WebSocket incremental: %d new events", len(new_events))
+        # Accumulate — never replace — so we don't rediscover old events
+        _seen_query_ids.update(e.get("queryId") for e in merged)
+        logger.info("WebSocket incremental: %d new events (seen total: %d)", len(new_events), len(_seen_query_ids))
         return new_events
 
-    # Full refresh — reset the seen-id window to the current result set
-    _seen_query_ids = {e.get("queryId") for e in merged}
+    # Full refresh — update the seen-id window WITHOUT pre-seeding it on the
+    # very first call.  If this is the first call (_seen_query_ids is empty)
+    # we do NOT seed it so the next incremental WebSocket poll will correctly
+    # report everything in the current window as "new" for the UI stream.
+    if _seen_query_ids:
+        _seen_query_ids = {e.get("queryId") for e in merged}
     return merged
 
 
@@ -710,16 +762,19 @@ def execution_result_to_event(
     catalog, schema = _extract_catalog_schema(sql)
     now = datetime.datetime.now(datetime.timezone.utc)
 
+    cluster = settings.CLUSTER_NAME or (
+        settings.PRESTO_HOST.split(".")[0] if settings.PRESTO_HOST else "watsonx-data"
+    )
     event = {
         "eventId": str(uuid.uuid4()),
         "queryId": exec_result.get("queryId", f"evt_{int(now.timestamp() * 1000)}"),
-        "engine": "Presto (Java) 0.286",
-        "cluster": settings.PRESTO_HOST.split(".")[0] if settings.PRESTO_HOST else "watsonx-data",
+        "engine": settings.ENGINE_VERSION,
+        "cluster": cluster,
         "timestamp": now.isoformat(),
         "createdTime": now.isoformat(),
         "endTime": now.isoformat(),
         "durationMs": duration_ms,
-        "cpuTimeMs": int(duration_ms * 1.8),
+        "cpuTimeMs": int(duration_ms * settings.CPU_TIME_MULTIPLIER),
         "user": user,
         "userRole": _infer_role(user),
         "clientIp": client_ip,
